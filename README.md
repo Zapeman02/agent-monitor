@@ -19,7 +19,7 @@ You also need the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/
 ## Install
 
 ```sh
-git clone https://github.com/<you>/agent-monitor.git ~/agent-monitor
+git clone https://github.com/willevic2002/agent-monitor.git ~/agent-monitor
 cd ~/agent-monitor
 packaging/install.sh            # --dry-run shows what it would do, --uninstall removes it
 ```
