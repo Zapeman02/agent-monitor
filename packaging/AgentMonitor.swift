@@ -6,18 +6,24 @@ import WebKit
 let bundleID = Bundle.main.bundleIdentifier ?? "local.AgentMonitor"
 let openURL = Notification.Name(bundleID + ".open")
 
-func loginURL() -> String? {
-    if CommandLine.arguments.count > 1 { return CommandLine.arguments[1] }
-    guard let launcher = Bundle.main.object(forInfoDictionaryKey: "AMLauncher") as? String else { return nil }
+let launcher = Bundle.main.object(forInfoDictionaryKey: "AMLauncher") as? String
+
+func runLauncher(_ arg: String) -> (Int32, String)? {
+    guard let launcher else { return nil }
     let p = Process(), out = Pipe()
     p.executableURL = URL(fileURLWithPath: launcher)
-    p.arguments = ["--print-url"]
+    p.arguments = [arg]
     p.standardOutput = out
     guard (try? p.run()) != nil else { return nil }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
-    let s = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    return p.terminationStatus == 0 ? s : nil
+    return (p.terminationStatus, String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+}
+
+func loginURL() -> String? {
+    if CommandLine.arguments.count > 1 { return CommandLine.arguments[1] }
+    guard let (rc, url) = runLauncher("--print-url"), rc == 0 else { return nil }
+    return url
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
@@ -62,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
+
+    // Closing the app stops the server and every claude session it runs.
+    func applicationWillTerminate(_ n: Notification) { _ = runLauncher("--stop") }
 }
 
 // Without Edit menu items, Cmd+C/V/X/A do nothing in the page's text fields.

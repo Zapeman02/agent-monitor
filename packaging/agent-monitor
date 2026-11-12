@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Agent Monitor launcher: make sure our server runs, mint a one-time login nonce, open the app window.
 The long-lived token is only read from the 0600 token file and sent in a header; never in argv/URLs/logs.
-Env: AM_PORT (7777), AM_CONFIG_DIR, AM_STATE_DIR, AM_REPO, AM_APP. Flags: --print-url (don't open a window)."""
-import http.client, json, os, shutil, socket, subprocess, sys, time
+Env: AM_PORT (7777), AM_CONFIG_DIR, AM_STATE_DIR, AM_REPO, AM_APP. Flags: --print-url (don't open a window); --stop (stop the server we started, and with it its claude sessions)."""
+import http.client, json, os, shutil, signal, socket, subprocess, sys, time
 
 REPO = ""  # install.sh writes the repo path here; empty = parent of this script's dir
 HOME = os.path.expanduser("~")
 PORT = int(os.environ.get("AM_PORT", 7777))
 CFG = os.environ.get("AM_CONFIG_DIR") or f"{HOME}/.config/agent-monitor"
 STATE = os.environ.get("AM_STATE_DIR") or f"{HOME}/.local/state/agent-monitor"
+PIDFILE = f"{STATE}/server.pid"
 APP = os.environ.get("AM_APP") or f"{HOME}/Applications/Agent Monitor.app"
 
 
@@ -67,8 +68,22 @@ def start_server():
     repo = os.environ.get("AM_REPO") or REPO or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     os.makedirs(STATE, exist_ok=True)
     log = open(f"{STATE}/server.log", "ab")
-    subprocess.Popen([sys.executable, f"{repo}/server.py"], cwd=repo, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                     start_new_session=True, env={**os.environ, "PORT": str(PORT), "AM_CONFIG_DIR": CFG, "PATH": PATH})
+    p = subprocess.Popen([sys.executable, f"{repo}/server.py"], cwd=repo, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         start_new_session=True, env={**os.environ, "PORT": str(PORT), "AM_CONFIG_DIR": CFG, "PATH": PATH})
+    with open(PIDFILE, "w") as f:
+        f.write(str(p.pid))
+
+
+def stop():
+    """SIGTERM the server from PIDFILE; its atexit handler closes the claude sessions."""
+    try:
+        pid = int(open(PIDFILE).read())
+        os.remove(PIDFILE)
+    except (OSError, ValueError):
+        return
+    cmd = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+    if "server.py" in cmd:  # the pid may have been reused since
+        os.kill(pid, signal.SIGTERM)
 
 
 def main():
@@ -99,4 +114,7 @@ def main():
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-main()
+if "--stop" in sys.argv:
+    stop()
+else:
+    main()
