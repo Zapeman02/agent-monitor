@@ -21,14 +21,13 @@ cd agent-monitor
 packaging/install.sh            # --dry-run shows what it would do, --uninstall removes it
 ```
 
-The installer does three things:
-- sets up a launchd **user agent** (`~/Library/LaunchAgents/local.agentmonitor.plist`) that serves on `127.0.0.1:7777`;
+The installer does two things:
 - adds a launcher at `~/.local/bin/agent-monitor`;
 - builds `~/Applications/Agent Monitor.app` from `packaging/AgentMonitor.swift`, so it shows up in Spotlight and Launchpad.
 
-Start it from Spotlight or with `agent-monitor`. Type a prompt in the chat panel on the left to start a session. Server log: `~/.local/state/agent-monitor/server.log`.
+Start it from Spotlight or with `agent-monitor`. Nothing runs at login: the first open starts the server on `127.0.0.1:7777`, and it keeps running until you log out or stop it (`pkill -f agent-monitor/server.py`). Type a prompt in the chat panel on the left to start a session. Server log: `~/.local/state/agent-monitor/server.log`.
 
-Use another port with `AM_PORT=7788 packaging/install.sh`. The agent looks for `claude` in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. If yours lives somewhere else, edit `PATH` in the plist and run the installer again.
+Use another port with `AM_PORT=7788 agent-monitor`. The server looks for `claude` in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. If yours lives somewhere else, edit `PATH` in `packaging/agent-monitor` and run the installer again.
 
 ## Security notes
 

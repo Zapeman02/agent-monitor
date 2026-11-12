@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Agent Monitor launcher: make sure our server runs, mint a one-time login nonce, open the app window.
 The long-lived token is only read from the 0600 token file and sent in a header; never in argv/URLs/logs.
-Env: AM_PORT (7777), AM_CONFIG_DIR, AM_STATE_DIR, AM_REPO, AM_APP, AM_NO_LAUNCHD=1. Flags: --print-url (don't open a window)."""
+Env: AM_PORT (7777), AM_CONFIG_DIR, AM_STATE_DIR, AM_REPO, AM_APP. Flags: --print-url (don't open a window)."""
 import http.client, json, os, shutil, socket, subprocess, sys, time
 
 REPO = ""  # install.sh writes the repo path here; empty = parent of this script's dir
@@ -9,8 +9,6 @@ HOME = os.path.expanduser("~")
 PORT = int(os.environ.get("AM_PORT", 7777))
 CFG = os.environ.get("AM_CONFIG_DIR") or f"{HOME}/.config/agent-monitor"
 STATE = os.environ.get("AM_STATE_DIR") or f"{HOME}/.local/state/agent-monitor"
-LABEL = "local.agentmonitor"
-PLIST = f"{HOME}/Library/LaunchAgents/{LABEL}.plist"
 APP = os.environ.get("AM_APP") or f"{HOME}/Applications/Agent Monitor.app"
 
 
@@ -61,15 +59,16 @@ def busy_pid():
     return pids[0] if pids else "unknown"
 
 
+# A Finder/Spotlight launch only has /usr/bin:/bin:/usr/sbin:/sbin; spawned `claude` lives in one of these.
+PATH = os.pathsep.join([f"{HOME}/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", os.environ.get("PATH", "/usr/bin:/bin")])
+
+
 def start_server():
-    if not os.environ.get("AM_NO_LAUNCHD") and shutil.which("launchctl") and os.path.exists(PLIST):
-        subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"], check=True)
-        return
     repo = os.environ.get("AM_REPO") or REPO or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     os.makedirs(STATE, exist_ok=True)
     log = open(f"{STATE}/server.log", "ab")
     subprocess.Popen([sys.executable, f"{repo}/server.py"], cwd=repo, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                     start_new_session=True, env={**os.environ, "PORT": str(PORT), "AM_CONFIG_DIR": CFG})
+                     start_new_session=True, env={**os.environ, "PORT": str(PORT), "AM_CONFIG_DIR": CFG, "PATH": PATH})
 
 
 def main():

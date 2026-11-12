@@ -16,7 +16,7 @@ def free_port():
 
 def launch(port, cfg, **extra):
     env = {**os.environ, "AM_PORT": str(port), "AM_CONFIG_DIR": cfg, "AM_STATE_DIR": os.path.join(tmp, "state"),
-           "AM_NO_LAUNCHD": "1", "AM_REPO": HERE, "PATH": bindir, **extra}
+           "AM_REPO": HERE, "PATH": bindir, **extra}
     return subprocess.run([sys.executable, os.path.join(PK, "agent-monitor"), "--print-url"], env=env, capture_output=True, text=True, timeout=30)
 
 
@@ -76,44 +76,25 @@ d.shutdown()
 
 # static checks
 ET.parse(os.path.join(PK, "agent-monitor.svg"))
-for f in ("Info.plist", "local.agentmonitor.plist"):
-    r = subprocess.run(["plutil", "-lint", os.path.join(PK, f)], capture_output=True, text=True); assert r.returncode == 0, r.stdout
-# claude must resolve under the launch agent's PATH
-agent = plistlib.loads(open(os.path.join(PK, "local.agentmonitor.plist"), "rb").read())
-agentpath = agent["EnvironmentVariables"]["PATH"].replace("@HOME@", os.path.expanduser("~"))
-if shutil.which("claude"):
-    assert shutil.which("claude", path=agentpath), agentpath
+r = subprocess.run(["plutil", "-lint", os.path.join(PK, "Info.plist")], capture_output=True, text=True); assert r.returncode == 0, r.stdout
 
 # install.sh --dry-run: lists targets, touches nothing
 home = os.path.join(tmp, "home"); os.mkdir(home)
 r = subprocess.run(["sh", os.path.join(PK, "install.sh"), "--dry-run"], env={**os.environ, "HOME": home}, capture_output=True, text=True)
 assert r.returncode == 0, r.stderr
-for t in (".local/bin/agent-monitor", "Applications/Agent Monitor.app", "Library/LaunchAgents/local.agentmonitor.plist",
-          "launchctl bootout", "launchctl bootstrap"):
+for t in (".local/bin/agent-monitor", "Applications/Agent Monitor.app"):
     assert t in r.stdout, t
 assert os.listdir(home) == [], os.listdir(home)
-# (e) real install into a temp HOME with stub launchctl/swiftc: REPO with spaces/&/| survives; port-busy stops
+# (e) real install into a temp HOME with a stub swiftc: REPO with spaces/&/| survives
 weird = os.path.join(tmp, "re po & x|y"); os.makedirs(os.path.join(weird, "packaging"))
 for f in os.listdir(PK): shutil.copy(os.path.join(PK, f), os.path.join(weird, "packaging", f))
 stub = os.path.join(tmp, "stub"); os.mkdir(stub)
-open(os.path.join(stub, "launchctl"), "w").write('#!/bin/sh\necho "launchctl $*" >> "$HOME/calls"\nexit 0\n')
 open(os.path.join(stub, "swiftc"), "w").write('#!/bin/sh\n: > "$3"\n')  # swiftc -O -o <out> <src>
-for f in ("launchctl", "swiftc"): os.chmod(os.path.join(stub, f), 0o755)
+os.chmod(os.path.join(stub, "swiftc"), 0o755)
 ih = os.path.join(tmp, "ihome"); os.mkdir(ih)
-ienv = {**os.environ, "HOME": ih, "PATH": stub + ":" + os.environ["PATH"], "AM_PORT": str(free_port())}
+ienv = {**os.environ, "HOME": ih, "PATH": stub + ":" + os.environ["PATH"]}
 r = subprocess.run(["sh", os.path.join(weird, "packaging", "install.sh")], env=ienv, capture_output=True, text=True)
 assert r.returncode == 0, r.stderr
 assert f'REPO = "{weird}"' in open(os.path.join(ih, ".local/bin/agent-monitor")).read()
-agent = plistlib.loads(open(os.path.join(ih, "Library/LaunchAgents/local.agentmonitor.plist"), "rb").read())
-assert agent["ProgramArguments"][1] == f"{weird}/server.py" and agent["WorkingDirectory"] == weird, agent
 assert plistlib.loads(open(os.path.join(ih, "Applications/Agent Monitor.app/Contents/Info.plist"), "rb").read())["AMLauncher"] == os.path.join(ih, ".local/bin/agent-monitor")
-calls = open(os.path.join(ih, "calls")).read(); assert "bootout" in calls and "bootstrap" in calls, calls
-bp = free_port(); busy = subprocess.Popen([sys.executable, "-m", "http.server", str(bp), "--bind", "127.0.0.1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-try:
-    time.sleep(1)
-    r = subprocess.run(["sh", os.path.join(weird, "packaging", "install.sh")], env={**ienv, "AM_PORT": str(bp)}, capture_output=True, text=True)
-    assert r.returncode == 1 and f"pid {busy.pid}" in r.stderr and "http.server" in r.stderr, (r.returncode, r.stderr)
-    assert busy.poll() is None
-finally:
-    busy.terminate()
 print("ok")
