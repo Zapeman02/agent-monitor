@@ -28,12 +28,13 @@ if [ "$DRY" != 1 ]; then
   command -v swiftc >/dev/null || { echo "swiftc not found: run xcode-select --install" >&2; exit 1; }
   swiftc -O -o "$APP/Contents/MacOS/AgentMonitor" "$SRC/AgentMonitor.swift"
   subst @BIN@ "$(xml "$BIN")" < "$SRC/Info.plist" > "$APP/Contents/Info.plist"
-  # icon: best effort, the app works without it
-  T=$(mktemp -d)
-  if qlmanage -t -s 1024 -o "$T" "$SRC/agent-monitor.svg" >/dev/null 2>&1; then
-    sips -s format icns "$T/agent-monitor.svg.png" --out "$APP/Contents/Resources/AgentMonitor.icns" >/dev/null 2>&1 || true
-  fi
-  rm -rf "$T"
+  T=$(mktemp -d)/AgentMonitor.iconset; mkdir -p "$T"
+  for n in 16 32 128 256 512; do
+    sips -z $n $n "$SRC/AgentMonitor.png" --out "$T/icon_${n}x${n}.png" >/dev/null
+    sips -z $((n * 2)) $((n * 2)) "$SRC/AgentMonitor.png" --out "$T/icon_${n}x${n}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$T" -o "$APP/Contents/Resources/AgentMonitor.icns"
+  rm -rf "$(dirname "$T")"
 fi
 
 echo "# done: open 'Agent Monitor' from Spotlight/Launchpad, or run agent-monitor (the server starts on first open)"
