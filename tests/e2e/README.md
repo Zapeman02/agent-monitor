@@ -1,5 +1,5 @@
 # Agent Monitor e2e
-Needs Node >= 20, python3 and Chromium (`/usr/bin/chromium`, override with `CHROMIUM=...`).
+Needs Node >= 20, python3 and Chromium (Playwright's own, `npx playwright-core install chromium`, or set `CHROMIUM=/path/to/chrome`).
 1. `cd tests/e2e && npm install` (once; pins playwright-core 1.65.0)
 2. `node tests/e2e/run.mjs` from the repo root; exits non-zero on failure, prints `ok` at the end.
 3. Each scenario starts its own server (random port, temp config/projects dir, fake claude) and kills it after.

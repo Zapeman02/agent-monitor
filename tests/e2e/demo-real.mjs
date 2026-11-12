@@ -3,7 +3,7 @@ import { chromium } from "playwright-core";
 import { execFileSync } from "node:child_process";
 const [cwd, shots] = process.argv.slice(2);
 const url = execFileSync(process.env.HOME + "/.local/bin/agent-monitor", ["--print-url"]).toString().trim();
-const browser = await chromium.launch({ executablePath: "/usr/bin/chromium" });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM });
 const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
 await page.goto(url);
 await page.getByTestId("new-session").click();

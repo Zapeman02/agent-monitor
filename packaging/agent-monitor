@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Agent Monitor launcher: make sure our server runs, mint a one-time login nonce, open the app window.
 The long-lived token is only read from the 0600 token file and sent in a header; never in argv/URLs/logs.
-Env: AM_PORT (7777), AM_CONFIG_DIR, AM_STATE_DIR, AM_REPO, AM_NO_SYSTEMD=1. Flags: --print-url (don't open a window); --window <url> (internal: the GTK window)."""
-import http.client, json, os, re, shutil, socket, subprocess, sys, time
+Env: AM_PORT (7777), AM_CONFIG_DIR, AM_STATE_DIR, AM_REPO, AM_APP, AM_NO_LAUNCHD=1. Flags: --print-url (don't open a window)."""
+import http.client, json, os, shutil, socket, subprocess, sys, time
 
 REPO = ""  # install.sh writes the repo path here; empty = parent of this script's dir
 HOME = os.path.expanduser("~")
 PORT = int(os.environ.get("AM_PORT", 7777))
 CFG = os.environ.get("AM_CONFIG_DIR") or f"{HOME}/.config/agent-monitor"
 STATE = os.environ.get("AM_STATE_DIR") or f"{HOME}/.local/state/agent-monitor"
+LABEL = "local.agentmonitor"
+PLIST = f"{HOME}/Library/LaunchAgents/{LABEL}.plist"
+APP = os.environ.get("AM_APP") or f"{HOME}/Applications/Agent Monitor.app"
 
 
 def listening():
@@ -19,16 +22,18 @@ def listening():
         return False
 
 
+def lsof(*fields):
+    """lsof lines for the 127.0.0.1:PORT LISTEN socket. Without root, lsof only sees our own uid's sockets."""
+    cmd = [os.environ.get("AM_LSOF", "lsof"), "-nP", f"-iTCP@127.0.0.1:{PORT}", "-sTCP:LISTEN", *fields]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout.splitlines()
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+
 def ours():
     """True if the 127.0.0.1:PORT LISTEN socket belongs to our uid (checked before the token is sent)."""
-    try:
-        for l in open(os.environ.get("AM_PROC_NET_TCP", "/proc/net/tcp")).read().splitlines()[1:]:
-            f = l.split()
-            if f[1] == f"0100007F:{PORT:04X}" and f[3] == "0A":
-                return int(f[7]) == os.getuid()
-    except (OSError, IndexError, ValueError):
-        pass
-    return False
+    return any(l == f"u{os.getuid()}" for l in lsof("-Fu"))
 
 
 def get_nonce():
@@ -46,21 +51,19 @@ def get_nonce():
 
 def fail(msg):
     print(msg, file=sys.stderr)
-    if shutil.which("notify-send"):
-        subprocess.run(["notify-send", "-u", "critical", "Agent Monitor", msg], check=False)
+    if shutil.which("osascript"):
+        subprocess.run(["osascript", "-e", f"display notification {json.dumps(msg)} with title \"Agent Monitor\""], check=False)
     sys.exit(1)
 
 
 def busy_pid():
-    out = subprocess.run(["ss", "-ltnpH", f"sport = :{PORT}"], capture_output=True, text=True).stdout
-    m = re.search(r"pid=(\d+)", out)
-    return m.group(1) if m else "unknown"
+    pids = lsof("-t")
+    return pids[0] if pids else "unknown"
 
 
 def start_server():
-    if not os.environ.get("AM_NO_SYSTEMD") and shutil.which("systemctl") and subprocess.run(
-            ["systemctl", "--user", "cat", "agent-monitor.service"], capture_output=True).returncode == 0:
-        subprocess.run(["systemctl", "--user", "start", "agent-monitor.service"], check=True)
+    if not os.environ.get("AM_NO_LAUNCHD") and shutil.which("launchctl") and os.path.exists(PLIST):
+        subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"], check=True)
         return
     repo = os.environ.get("AM_REPO") or REPO or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     os.makedirs(STATE, exist_ok=True)
@@ -90,53 +93,11 @@ def main():
     if "--print-url" in sys.argv:
         print(url)
         return
-    # native GTK window in its own detached process (see window())
-    subprocess.Popen([sys.executable, os.path.realpath(__file__), "--window", url],
+    if not os.path.isdir(APP):
+        fail(f"{APP} not found; run packaging/install.sh")
+    # the app is single-instance: a running window gets the new login URL and comes to the front
+    subprocess.Popen([f"{APP}/Contents/MacOS/AgentMonitor", url],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
-
-APP_ID = "local.AgentMonitor"  # single-instance id; the Hyprland class comes from prgname below
-
-
-def window(url):
-    """Native GTK3 + WebKitGTK window. Ephemeral cookie store; only our own origin may load in it."""
-    import gi
-    gi.require_version("Gtk", "3.0")
-    gi.require_version("WebKit2", "4.1")
-    from gi.repository import Gio, GLib, Gtk, WebKit2
-    GLib.set_prgname("agent-monitor")  # GTK3 Wayland app_id -> Hyprland class "agent-monitor"
-    origin = f"http://127.0.0.1:{PORT}/"
-    app = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
-
-    def policy(view, decision, kind):
-        if kind == WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION:
-            decision.ignore(); return True
-        if kind == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
-            u = decision.get_navigation_action().get_request().get_uri()
-            if not u.startswith(origin):
-                decision.ignore(); return True
-        return False
-
-    def command_line(a, cmd):
-        u = cmd.get_arguments()[-1]  # fresh one-time login URL from this launch
-        if a.get_windows():  # already open: re-login (server may have restarted) and raise it
-            w = a.get_windows()[0]; w.get_child().load_uri(u); w.present(); return 0
-        view = WebKit2.WebView.new_with_context(WebKit2.WebContext.new_ephemeral())
-        view.connect("decide-policy", policy)
-        w = Gtk.ApplicationWindow(application=a, title="Agent Monitor")
-        w.set_default_size(1440, 900)
-        w.set_icon_name("agent-monitor")
-        w.add(view)
-        view.load_uri(u)
-        w.show_all()
-        return 0
-
-    app.connect("command-line", command_line)
-    app.run([sys.argv[0], url])
-
-
-if "--window" in sys.argv:
-    window(sys.argv[sys.argv.index("--window") + 1])
-    sys.exit(0)
 
 main()

@@ -63,7 +63,7 @@ async function scenario(name, fixture, fn) {
   const t0 = Date.now(); let s, browser;
   try {
     s = await startServer(fixture);
-    browser = await chromium.launch({ executablePath: process.env.CHROMIUM || "/usr/bin/chromium", args: ["--no-sandbox"] });
+    browser = await chromium.launch({ executablePath: process.env.CHROMIUM, args: ["--no-sandbox"] });
     await fn(s, browser);
     console.log(`  pass  ${name} (${Date.now() - t0}ms)`);
   } finally {
