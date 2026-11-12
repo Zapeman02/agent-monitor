@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Agent Monitor launcher: make sure our server runs, mint a one-time login nonce, open the app window.
+The long-lived token is only read from the 0600 token file and sent in a header; never in argv/URLs/logs.
+Env: AM_PORT (7777), AM_CONFIG_DIR, AM_STATE_DIR, AM_REPO, AM_NO_SYSTEMD=1. Flags: --print-url (don't open a window); --window <url> (internal: the GTK window)."""
+import http.client, json, os, re, shutil, socket, subprocess, sys, time
+
+REPO = ""  # install.sh writes the repo path here; empty = parent of this script's dir
+HOME = os.path.expanduser("~")
+PORT = int(os.environ.get("AM_PORT", 7777))
+CFG = os.environ.get("AM_CONFIG_DIR") or f"{HOME}/.config/agent-monitor"
+STATE = os.environ.get("AM_STATE_DIR") or f"{HOME}/.local/state/agent-monitor"
+
+
+def listening():
+    try:
+        socket.create_connection(("127.0.0.1", PORT), 0.5).close()
+        return True
+    except OSError:
+        return False
+
+
+def ours():
+    """True if the 127.0.0.1:PORT LISTEN socket belongs to our uid (checked before the token is sent)."""
+    try:
+        for l in open(os.environ.get("AM_PROC_NET_TCP", "/proc/net/tcp")).read().splitlines()[1:]:
+            f = l.split()
+            if f[1] == f"0100007F:{PORT:04X}" and f[3] == "0A":
+                return int(f[7]) == os.getuid()
+    except (OSError, IndexError, ValueError):
+        pass
+    return False
+
+
+def get_nonce():
+    """Nonce if OUR server answers with the current token file, else None."""
+    try:
+        tok = open(f"{CFG}/token").read().strip()
+        c = http.client.HTTPConnection("127.0.0.1", PORT, timeout=3)
+        c.request("POST", "/api/once", "{}", {"X-AM-Token": tok, "Content-Type": "application/json"})
+        r = c.getresponse()
+        body = r.read()
+        return json.loads(body)["once"] if r.status == 200 else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def fail(msg):
+    print(msg, file=sys.stderr)
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-u", "critical", "Agent Monitor", msg], check=False)
+    sys.exit(1)
+
+
+def busy_pid():
+    out = subprocess.run(["ss", "-ltnpH", f"sport = :{PORT}"], capture_output=True, text=True).stdout
+    m = re.search(r"pid=(\d+)", out)
+    return m.group(1) if m else "unknown"
+
+
+def start_server():
+    if not os.environ.get("AM_NO_SYSTEMD") and shutil.which("systemctl") and subprocess.run(
+            ["systemctl", "--user", "cat", "agent-monitor.service"], capture_output=True).returncode == 0:
+        subprocess.run(["systemctl", "--user", "start", "agent-monitor.service"], check=True)
+        return
+    repo = os.environ.get("AM_REPO") or REPO or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    os.makedirs(STATE, exist_ok=True)
+    log = open(f"{STATE}/server.log", "ab")
+    subprocess.Popen([sys.executable, f"{repo}/server.py"], cwd=repo, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                     start_new_session=True, env={**os.environ, "PORT": str(PORT), "AM_CONFIG_DIR": CFG})
+
+
+def main():
+    if listening() and not ours():
+        fail(f"port {PORT} is in use by another user's process (pid {busy_pid()}) — token not sent; stop it or set AM_PORT")
+    nonce = get_nonce() if listening() else None
+    if nonce is None and listening():
+        time.sleep(1)  # maybe our server is mid-restart and rewriting the token
+        nonce = get_nonce()
+        if nonce is None:
+            fail(f"port {PORT} is in use by another process (pid {busy_pid()}) — stop it or set AM_PORT")
+    if nonce is None:
+        start_server()
+        end = time.monotonic() + 10
+        while nonce is None and time.monotonic() < end:
+            time.sleep(0.25)
+            nonce = get_nonce() if listening() else None
+        if nonce is None:
+            fail(f"server did not respond on port {PORT} within 10 s (log: {STATE}/server.log)")
+    url = f"http://127.0.0.1:{PORT}/login?once={nonce}&to=brain"
+    if "--print-url" in sys.argv:
+        print(url)
+        return
+    # native GTK window in its own detached process (see window())
+    subprocess.Popen([sys.executable, os.path.realpath(__file__), "--window", url],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+APP_ID = "local.AgentMonitor"  # single-instance id; the Hyprland class comes from prgname below
+
+
+def window(url):
+    """Native GTK3 + WebKitGTK window. Ephemeral cookie store; only our own origin may load in it."""
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("WebKit2", "4.1")
+    from gi.repository import Gio, GLib, Gtk, WebKit2
+    GLib.set_prgname("agent-monitor")  # GTK3 Wayland app_id -> Hyprland class "agent-monitor"
+    origin = f"http://127.0.0.1:{PORT}/"
+    app = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+
+    def policy(view, decision, kind):
+        if kind == WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION:
+            decision.ignore(); return True
+        if kind == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
+            u = decision.get_navigation_action().get_request().get_uri()
+            if not u.startswith(origin):
+                decision.ignore(); return True
+        return False
+
+    def command_line(a, cmd):
+        u = cmd.get_arguments()[-1]  # fresh one-time login URL from this launch
+        if a.get_windows():  # already open: re-login (server may have restarted) and raise it
+            w = a.get_windows()[0]; w.get_child().load_uri(u); w.present(); return 0
+        view = WebKit2.WebView.new_with_context(WebKit2.WebContext.new_ephemeral())
+        view.connect("decide-policy", policy)
+        w = Gtk.ApplicationWindow(application=a, title="Agent Monitor")
+        w.set_default_size(1440, 900)
+        w.set_icon_name("agent-monitor")
+        w.add(view)
+        view.load_uri(u)
+        w.show_all()
+        return 0
+
+    app.connect("command-line", command_line)
+    app.run([sys.argv[0], url])
+
+
+if "--window" in sys.argv:
+    window(sys.argv[sys.argv.index("--window") + 1])
+    sys.exit(0)
+
+main()

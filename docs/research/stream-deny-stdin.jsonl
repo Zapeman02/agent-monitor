@@ -1,0 +1,3 @@
+{"type":"control_request","request_id":"req_1_init","request":{"subtype":"initialize","hooks":null}}
+{"type":"user","message":{"role":"user","content":"Run the Bash command `touch y.txt` yourself (no subagents). If it is denied, reply with one short sentence and stop."},"parent_tool_use_id":null,"session_id":"default"}
+{"type":"control_response","response":{"subtype":"success","request_id":"4481bf95-5cae-4909-8d95-e7afcba4b122","response":{"behavior":"deny","message":"Denied in Agent Monitor"}}}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Agent Monitor
+Comment=Monitor and control Claude agents locally
+Exec=@BIN@
+Icon=agent-monitor
+Terminal=false
+Categories=Development;
+StartupWMClass=agent-monitor

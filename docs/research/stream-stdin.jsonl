@@ -1,0 +1,3 @@
+{"type":"control_request","request_id":"req_1_init","request":{"subtype":"initialize","hooks":null}}
+{"type":"user","message":{"role":"user","content":"Use the Agent tool exactly once to dispatch ONE general-purpose subagent with this task: 'Run the Bash command `touch x.txt` in the current directory, then reply DONE.' Do not run any tools yourself. After it hands back, reply with one short sentence."},"parent_tool_use_id":null,"session_id":"default"}
+{"type":"control_response","response":{"subtype":"success","request_id":"4eea2561-7864-418b-9d60-c200f96a2d28","response":{"behavior":"allow","updatedInput":{"command":"touch x.txt","description":"Create empty file x.txt"}}}}
